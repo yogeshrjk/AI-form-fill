@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Form Auto Filler</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div class="header-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 20h16"/>
+          <path d="M4 20V4"/>
+          <path d="M8 20V8"/>
+          <path d="M12 20V12"/>
+          <path d="M16 20V6"/>
+          <path d="M20 20V10"/>
+          <circle cx="20" cy="6" r="2" fill="currentColor"/>
+          <circle cx="16" cy="8" r="2" fill="currentColor"/>
+          <circle cx="12" cy="10" r="2" fill="currentColor"/>
+          <circle cx="8" cy="8" r="2" fill="currentColor"/>
+        </svg>
+      </div>
+      <div class="header-text">
+        <h1>AI Form Filler</h1>
+        <span class="subtitle">Free AI tool</span>
+      </div>
+    </header>
+
+    <div id="status-container">
+      <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <div class="section collapsible">
+      <div class="section-header" data-toggle="collapse">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        <span>API Configuration</span>
+        <svg class="collapse-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="collapse-content">
+        <div class="input-group">
+          <input type="password" id="apiKeyInput" placeholder="Enter your Gemini API key" class="input" autocomplete="off">
+          <div class="help-row">
+            <button id="apiKeyHelpBtn" class="help-link" type="button">How do I get a Gemini API key?</button>
+            <div id="apiKeyHelpPopover" class="help-popover hidden" role="tooltip">
+              <div class="help-popover-title">Get a Gemini API key</div>
+              <ol>
+                <li>Open Google AI Studio and sign in with your Google account.</li>
+                <li>Go to the API keys section and create a new API key.</li>
+                <li>Copy the key and paste it into this extension.</li>
+                <li>Save the key, then refresh the page if needed.</li>
+              </ol>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Open Google AI Studio</a>
+            </div>
+          </div>
+          <div class="btn-group">
+            <button id="saveApiKey" class="btn btn-primary">Save Key</button>
+            <button id="clearApiKey" class="btn btn-secondary">Clear</button>
+          </div>
+          <div id="apiKeyStatus" class="status-msg"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section fill-section">
+      <div class="section-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+          <polyline points="22 4 12 14.01 9 11.01"/>
+        </svg>
+        <span>Auto Fill</span>
+      </div>
+      <div class="input-group" style="margin-bottom:10px;">
+        <textarea id="customPrompt" class="textarea" placeholder="Optional: custom instructions for the AI (e.g., 'Use test data', 'Fill with my name and address')" rows="2"></textarea>
+        <div class="prompt-toolbar">
+          <button id="savePromptBtn" class="btn btn-primary btn-small" style="padding:4px 10px;font-size:11px;">+ Save Prompt</button>
+        </div>
+        <div id="promptTemplatesList" class="prompt-templates-list"></div>
+      </div>
+      <button id="fillForm" class="btn btn-accent btn-large">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        Fill Current Form
+      </button>
+      <div id="fillStatus" class="status-msg"></div>
+    </div>
+
+    <div class="section forms-section" id="formsSection" style="display:none;">
+      <div class="section-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        <span>Detected Forms (<span id="formCount">0</span>)</span>
+      </div>
+      <div id="formsList"></div>
+    </div>
+    <div id="aiPreviewModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>AI Preview — Review Values</h3>
+          <button id="closeAiPreview" class="btn-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div id="aiPreviewContent" class="preview-content"></div>
+        <div class="modal-actions">
+          <button id="confirmAiFill" class="btn btn-accent">Fill Forms</button>
+          <button id="cancelAiPreview" class="btn btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="section collapsible">
+      <div class="section-header" data-toggle="collapse">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>Settings</span>
+        <svg class="collapse-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="collapse-content">
+        <div class="settings-grid">
+          <div class="setting-item">
+            <label for="modelSelect">Model</label>
+            <select id="modelSelect" class="select">
+              <option value="auto">Auto (Fallback)</option>
+              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+              <option value="gemma-4-26b-a4b-it">Gemma 4 26B</option>
+              <option value="gemma-4-31b-it">Gemma 4 31B</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label for="fillSpeed">Fill Speed</label>
+            <select id="fillSpeed" class="select">
+              <option value="instant">Instant</option>
+              <option value="human">Human-like</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label for="toneSelect">Tone</label>
+            <select id="toneSelect" class="select">
+              <option value="professional">Professional</option>
+              <option value="formal">Formal</option>
+              <option value="friendly">Friendly</option>
+              <option value="short">Short</option>
+              <option value="detailed">Detailed</option>
+              <option value="technical">Technical</option>
+              <option value="marketing">Marketing</option>
+            </select>
+          </div>
+          <div class="setting-item checkbox-item">
+            <label>
+              <input type="checkbox" id="autoFillConfirm" checked>
+              <span>Show confirmation before fill</span>
+            </label>
+          </div>
+          <div class="setting-item checkbox-item">
+            <label>
+              <input type="checkbox" id="aiPreview">
+              <span>Preview before filling</span>
+            </label>
+          </div>
+        </div>
+        <button id="saveSettings" class="btn btn-primary btn-small">Save Settings</button>
+        <div id="settingsStatus" class="status-msg"></div>
+      </div>
+    </div>
+
+    <div class="section collapsible">
+      <div class="section-header" data-toggle="collapse">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        <span>Upload Document</span>
+        <svg class="collapse-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="collapse-content">
+        <p style="font-size:12px;color:var(--text-muted);line-height:1.5;">
+          Upload a resume, company profile, spreadsheet, or any document. AI extracts the text and uses it as context when filling forms. Supports images, PDF, CSV, and Excel (.xlsx).
+        </p>
+        <div class="upload-area" id="uploadArea">
+          <input type="file" id="fileInput" accept="image/*,application/pdf,.csv,.xlsx,.xls" hidden>
+          <div class="upload-placeholder" id="uploadPlaceholder">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.4;">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>Click to upload image, PDF, or spreadsheet</span>
+          </div>
+          <div class="upload-preview hidden" id="uploadPreview">
+            <div class="upload-file-info" id="uploadFileInfo"></div>
+            <div class="upload-actions">
+              <button id="clearUploadBtn" class="btn btn-secondary btn-small">Clear</button>
+            </div>
+          </div>
+        </div>
+        <div id="ocrStatus" class="status-msg"></div>
+        <textarea id="ocrContext" class="textarea ocr-text" placeholder="Extracted text will appear here. You can edit it before filling." rows="8" style="display:none;"></textarea>
+        <button id="fillFromUploadBtn" class="btn btn-accent btn-large" style="display:none;">Fill from document</button>
+      </div>
+    </div>
+
+    <div id="loadingOverlay" class="loading-overlay hidden">
+      <div class="loading-content">
+        <div class="spinner"></div>
+        <p id="loadingText">Generating form data with AI...</p>
+        <button id="stopFillBtn" class="btn btn-secondary btn-small" style="margin-top:12px;">Stop</button>
+      </div>
+    </div>
+
+    <div id="confirmationModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Confirm Auto Fill</h3>
+          <button id="closeModal" class="btn-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div id="previewContent" class="preview-content"></div>
+        <div class="modal-prompt">
+          <textarea id="modalPrompt" class="textarea" placeholder="Optional: custom instructions for the AI..." rows="2"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button id="confirmFill" class="btn btn-accent">Fill Forms</button>
+          <button id="cancelFill" class="btn btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="section collapsible">
+      <div class="section-header" data-toggle="collapse">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+        <span>Smart Memory</span>
+        <svg class="collapse-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="collapse-content">
+        <p style="font-size:12px;color:var(--text-muted);line-height:1.5;">
+          Saved values are added to the Gemini prompt as extra context so the model can use them while generating the final JSON.
+        </p>
+        <div class="memory-grid" id="smartMemoryGrid"></div>
+        <button id="saveSmartMemory" class="btn btn-primary btn-small">Save Memory</button>
+        <div id="smartMemoryStatus" class="status-msg"></div>
+      </div>
+    </div>
+
+    <div class="section collapsible">
+      <div class="section-header" data-toggle="collapse">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+        <span>Debug Log (<span id="debugCount">0</span>)</span>
+        <svg class="collapse-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="collapse-content" style="max-height:200px; overflow-y:auto; font-size:11px; font-family:monospace; white-space:pre-wrap; background:#1a1b2e; padding:8px; border-radius:6px; color:#a0a0b8; margin-top:8px;" id="debugContent"></div>
+    </div>
+  </div>
+
+  <script src="../utils/storage.js"></script>
+  <script src="../services/gemini.js"></script>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
