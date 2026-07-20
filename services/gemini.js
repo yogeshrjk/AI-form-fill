@@ -1,18 +1,18 @@
-const MODELS = [
+var MODELS = [
   'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
   'gemma-4-26b-a4b-it',
   'gemma-4-31b-it'
 ];
 
-const OCR_MODELS = [
+var OCR_MODELS = [
   'gemma-4-31b-it',
   'gemma-4-26b-a4b-it'
 ];
 
-const RATE_LIMIT_BACKOFF_MS = 60 * 1000;
+var RATE_LIMIT_BACKOFF_MS = 60 * 1000;
 
-const GeminiService = {
+var GeminiService = {
   MODELS,
   rateLimitedUntil: {},
 
@@ -26,11 +26,12 @@ const GeminiService = {
     marketing: 'Marketing — Use persuasive, benefit-driven language with a promotional tone.'
   },
 
-  async generate(prompt, fields, settings, customPrompt = '', ocrContext = '', memoryContext = '') {
+  async generate(prompt, fields, settings, customPrompt = '', ocrContext = '') {
     const tone = settings?.tone || 'professional';
-    const systemPrompt = this.buildSystemPrompt(fields, customPrompt, tone, ocrContext, memoryContext, settings);
-    const userPrompt = this.buildUserPrompt(prompt, fields);
-    const text = await this.generateText(`${systemPrompt}\n\n${userPrompt}`, settings);
+    const pageContext = settings?.pageContext || '';
+    const systemPrompt = this.buildSystemPrompt(fields, customPrompt, tone, ocrContext, settings, pageContext);
+    const userPrompt = this.buildUserPrompt(prompt, fields, pageContext);
+    const text = await this.generateText(systemPrompt, userPrompt, settings);
 
     return this.parseResponse(text, fields, settings, ocrContext);
   },
@@ -124,7 +125,7 @@ const GeminiService = {
     throw lastError || new Error('All OCR models failed. Please try again later.');
   },
 
-  async generateText(prompt, settings) {
+  async generateText(systemPrompt, userPrompt, settings) {
     const apiKey = await window.AppStorage.getApiKey();
     if (!apiKey) {
       throw new Error('API key not set. Please set your Gemini API key in the extension settings.');
@@ -163,7 +164,7 @@ const GeminiService = {
         this.reportProgress(`Trying fallback model ${model}`);
       }
 
-      const { url, headers, body } = this.buildRequest(apiKey, model, prompt);
+      const { url, headers, body } = this.buildRequest(apiKey, model, systemPrompt, userPrompt);
 
       try {
         const response = await fetch(url, {
@@ -219,25 +220,31 @@ const GeminiService = {
     throw lastError || new Error('All models failed. Please try again later.');
   },
 
-  buildRequest(apiKey, model, prompt) {
+  buildRequest(apiKey, model, systemPrompt, userPrompt) {
+    const body = {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        {
+          parts: [
+            {
+              text: userPrompt
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        maxOutputTokens: 8192,
+        temperature: 0.8,
+        topP: 0.95,
+        responseMimeType: 'application/json'
+      }
+    };
     return {
       url: this.buildUrl(model),
       headers: this.buildHeaders(apiKey),
-      body: {
-        contents: [
-          {
-            parts: [
-              {
-                text: prompt
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          maxOutputTokens: 8192,
-          responseMimeType: 'application/json'
-        }
-      }
+      body
     };
   },
 
@@ -352,38 +359,42 @@ const GeminiService = {
       .trim();
   },
 
-  buildSystemPrompt(fields, customPrompt = '', tone = 'professional', ocrContext = '', memoryContext = '', settings = {}) {
+  buildSystemPrompt(fields, customPrompt = '', tone = 'professional', ocrContext = '', settings = {}, pageContext = '') {
     const fieldKeys = fields.map(f => f.uniqueKey || f.name || f.id).filter(Boolean);
     const toneInstruction = this.TONES[tone] || this.TONES.professional;
 
     const hasReferenceContext = Boolean((ocrContext || '').trim());
     const documentOnly = Boolean(settings?.documentOnlyContext);
-    let rules = `You are a form-filling assistant. ${documentOnly ? 'Fill forms using ONLY the reference document data. Do not invent, infer, or use sample values.' : (hasReferenceContext ? 'Extract form values from the reference document data when possible, and use realistic fake data only for fields not covered by the reference.' : 'Generate realistic fake data.')}
+    let rules = `You are a form-filling assistant. Fill every single field with a realistic value. Never leave any field empty.
+
+${documentOnly ? 'Fill forms using ONLY the reference document data. Do not invent, infer, or use sample values.' : (hasReferenceContext ? 'Extract form values from the reference document data when possible. For fields not covered by the reference, generate realistic values.' : 'You generate realistic, unique, and diverse values for forms. Every request is independent with no history or memory of previous responses.')}
 
 TONE: ${toneInstruction}
 
 RULES:
-1. Return ONLY valid JSON. No markdown, no code fences, no explanation.
-2. ${documentOnly ? 'Use exact values from the reference document when a field matches. If the reference document does not contain a matching value, return empty string "" for that field.' : (hasReferenceContext ? 'Prefer exact names, addresses, emails, phone numbers, IDs, dates, and other values from the reference document when they match a field.' : 'Use realistic names, addresses, emails, and phone numbers.')}
+1. Return ONLY a valid JSON object. Never include any text, explanation, commentary, thinking, descriptions, markdown, or code fences. The entire response must be a single JSON object and nothing else.
+2. ${documentOnly ? 'Use exact values from the reference document when a field matches. If the reference document does not contain a matching value, return empty string "" for that field.' : 'Fill every single field with a realistic value. Never leave any field empty or return empty string "".'}
 3. Use the "uniqueKey" value as the JSON key for each field. Map each field's value to its uniqueKey.
 4. Respect field types (email fields get emails, tel fields get phone numbers).
 5. For select/choice fields, ONLY pick from provided options. Never invent options.
-6. ${documentOnly ? 'Do not fill a field just because it is required. Required fields still need empty string "" when the document has no matching value.' : 'Fill required and optional fields. Do not skip optional fields just because they are optional.'}
+6. Fill every field. Never skip, leave blank, or return empty string "" for any field. Every field must have a realistic value.
 7. For date fields, use YYYY-MM-DD.
 8. For checkbox fields, use true/false for single checkboxes. If a checkbox field belongs to a checkbox group, only mark the relevant options true and leave unrelated options false.
 9. For radio fields, choose exactly one option value per radio group and match by label, value, and nearby context.
-10. Repeated groups, tables, arrays, and dynamic rows are marked with repeatedGroupId and repeatedGroupIndex. Treat each row as a separate object, keep row indexes stable, and generate distinct values for each row instead of copying the same values across every row.
+10. Repeated groups, tables, arrays, and dynamic rows are marked with repeatedGroupId and repeatedGroupIndex. Treat each row as a separate object, keep row indexes stable, and generate distinct values for each row instead of copying the same values across every row. Do NOT append row numbers, indices, or any identifiers (e.g., " 1", " 2") to field values. Each value must be a complete, standalone value without trailing numbering.
 11. Use region and formatting hints from the page, field labels, placeholders, option labels, and group context.
-12. ${documentOnly ? 'Use empty string "" for every field that cannot be matched directly to the reference document.' : 'Use empty string "" only when a field is unsafe, impossible, or truly not applicable.'}
-13. ${documentOnly ? 'For fields named title, header, heading, document title, or subject, use the document heading/title only. Never use Purpose for title/header fields.' : 'Generate data ONLY for these fields: ' + fieldKeys.join(', ')}
-${documentOnly ? '14. For Purpose fields, use only the value explicitly labeled Purpose.' : ''}`;
+12. Every field must have a value. Do not return empty string "" for any field. Generate a realistic, context-appropriate value for every field.
+13. You are generating data for these fields: ${fieldKeys.join(', ')}.
+14. Never reuse examples from previous responses. Every response must contain different products, services, items, or works.
+15. Avoid overusing common items (e.g., "Northstar Labs", "Alex Morgan", "Widget"). Pull from a wide range of industries: manufacturing, healthcare, construction, education, hospitality, logistics, agriculture, retail, laboratories, security, networking, electrical, civil works, furniture, software, licensing, maintenance, and facility management.
+16. Make every generated value unique within the response. No two fields should receive the same or nearly identical values unless the form explicitly asks for the same information twice.`;
 
     if (ocrContext) {
       rules += `\n\nREFERENCE DOCUMENT DATA (${documentOnly ? 'only source of values; return empty string for unmatched fields' : 'use these values when they match form fields — prefer these over generated data'}):\n${ocrContext}`;
     }
 
-    if (memoryContext) {
-      rules += `\n\nSAVED MEMORY CONTEXT (additional context only; use it together with the page and document context):\n${memoryContext}`;
+    if (pageContext) {
+      rules += `\n\nPAGE VISIBLE TEXT (visible text extracted from the page — use this as context to understand the form purpose and determine appropriate values):\n${pageContext}`;
     }
 
     if (customPrompt) {
@@ -393,16 +404,25 @@ ${documentOnly ? '14. For Purpose fields, use only the value explicitly labeled 
     return rules;
   },
 
-  buildUserPrompt(prompt, fields) {
+  buildUserPrompt(prompt, fields, pageContext = '') {
     const fieldsJson = JSON.stringify(this.serializeFieldsForPrompt(fields), null, 2);
-    return `Page: ${document?.title || 'Unknown'}
+    let result = `Page: ${document?.title || 'Unknown'}
 URL: ${window?.location?.href || 'Unknown'}
 Form: ${prompt}
 
 Fields:
 ${fieldsJson}
 
-Return ONLY a JSON object with values for these fields.`;
+`;
+    if (pageContext) {
+      result += `PAGE VISIBLE TEXT (use this to understand the page context, determine what this form is for, and decide which values are appropriate):
+${pageContext}
+
+`;
+    }
+    result += `Return ONLY a JSON object with values for these fields using the keys shown above. Do not include any text, explanation, or commentary outside the JSON object.`;
+
+    return result;
   },
 
   serializeFieldsForPrompt(fields) {
@@ -473,11 +493,21 @@ Return ONLY a JSON object with values for these fields.`;
         const value = foundKey !== undefined ? parsed[foundKey] : undefined;
         const normalizedValue = this.normalizeParsedValueForField(field, value);
         if (this.hasUsableValue(normalizedValue)) {
-          result[key] = settings?.documentOnlyContext && !this.valueAppearsInContext(normalizedValue, ocrContext)
-            ? ''
-            : normalizedValue;
+          if (this.isFieldLabelReturnedAsValue(normalizedValue, field)) {
+            result[key] = settings?.documentOnlyContext ? '' : this.getFallbackValue(field);
+          } else {
+            result[key] = settings?.documentOnlyContext && !this.valueAppearsInContext(normalizedValue, ocrContext)
+              ? ''
+              : normalizedValue;
+          }
         } else {
           result[key] = settings?.documentOnlyContext ? '' : this.getFallbackValue(field);
+        }
+      }
+      for (const key of Object.keys(result)) {
+        const val = result[key];
+        if (typeof val === 'string') {
+          result[key] = val.replace(/\s+\d{1,2}$/, '');
         }
       }
       return result;
@@ -486,6 +516,12 @@ Return ONLY a JSON object with values for these fields.`;
         ? this.buildDocumentOnlyResult(fields, ocrContext)
         : this.repairStructuredResponse(cleaned, fields);
       if (repaired) {
+        for (const key of Object.keys(repaired)) {
+          const val = repaired[key];
+          if (typeof val === 'string') {
+            repaired[key] = val.replace(/\s+\d{1,2}$/, '');
+          }
+        }
         return repaired;
       }
 
@@ -645,6 +681,7 @@ Return ONLY a JSON object with values for these fields.`;
     }
 
     value = value.replace(/[",;]+$/g, '').trim();
+    value = value.replace(/\s+\d{1,2}$/, '');
     return value;
   },
 
@@ -723,6 +760,21 @@ Return ONLY a JSON object with values for these fields.`;
     return value !== null && value !== undefined && value !== '';
   },
 
+  isFieldLabelReturnedAsValue(value, field) {
+    if (typeof value !== 'string') return false;
+    const val = value.trim().toLowerCase();
+    if (!val) return false;
+    const candidates = [
+      field.label,
+      field.placeholder,
+      field.name,
+      field.id,
+      field.ariaLabel,
+      field.uniqueKey
+    ].filter(Boolean).map(s => String(s).trim().toLowerCase());
+    return candidates.includes(val);
+  },
+
   normalizeParsedValueForField(field, value) {
     const type = String(field.type || '').toLowerCase();
 
@@ -732,6 +784,12 @@ Return ONLY a JSON object with values for these fields.`;
 
     if (type === 'radio') {
       return this.normalizeChoiceValue(field, value);
+    }
+
+    const textValue = typeof value === 'string' ? value.trim() : '';
+    if ((type === 'text' || type === 'textarea' || type === '') && textValue) {
+      const cleaned = textValue.replace(/\s+\d{1,2}$/, '');
+      return cleaned !== textValue ? cleaned : value;
     }
 
     if (Array.isArray(value)) {
@@ -1101,7 +1159,6 @@ Return ONLY a JSON object with values for these fields.`;
 
   getFallbackValue(field) {
     const type = (field.type || 'text').toLowerCase();
-    const hint = `${field.label || ''} ${field.name || ''} ${field.id || ''} ${field.placeholder || ''}`.toLowerCase();
 
     if (field.options?.length) {
       const option = field.options.find(opt => {
@@ -1116,24 +1173,11 @@ Return ONLY a JSON object with values for these fields.`;
     if (type === 'radio') return '';
     if (type === 'date') return new Date().toISOString().slice(0, 10);
     if (type === 'color') return '#4f46e5';
-    if (type === 'range' || type === 'number') return field.min || '10';
-    if (type === 'email' || hint.includes('email')) return 'alex.morgan@example.com';
-    if (type === 'tel' || hint.includes('phone') || hint.includes('mobile')) return '+1 555 123 4567';
-    if (type === 'url' || hint.includes('website') || hint.includes('linkedin')) return 'https://example.com';
-    if (hint.includes('first') && hint.includes('name')) return 'Alex';
-    if (hint.includes('last') && hint.includes('name')) return 'Morgan';
-    if (hint.includes('name')) return 'Alex Morgan';
-    if (hint.includes('company') || hint.includes('organization')) return 'Northstar Labs';
-    if (hint.includes('job') || hint.includes('title') || hint.includes('role')) return 'Product Manager';
-    if (hint.includes('city')) return 'San Francisco';
-    if (hint.includes('state')) return 'CA';
-    if (hint.includes('zip') || hint.includes('postal')) return '94105';
-    if (hint.includes('address')) return '123 Market Street';
-    if (hint.includes('project')) return 'A practical web automation project focused on improving form completion speed and accuracy.';
-    if (type === 'textarea' || hint.includes('description') || hint.includes('message') || hint.includes('summary')) {
-      return 'Professional, detail-oriented, and focused on delivering reliable results.';
-    }
-    return 'Sample value';
+    if (type === 'range' || type === 'number') return field.min || '';
+    if (type === 'email') return '';
+    if (type === 'tel') return '';
+    if (type === 'url') return '';
+    return '';
   }
 };
 

@@ -1,4 +1,4 @@
-const EventUtils = {
+var EventUtils = {
   dispatchInputEvent(element) {
     element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
   },

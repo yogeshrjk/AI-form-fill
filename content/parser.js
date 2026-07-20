@@ -1,4 +1,4 @@
-const FormParser = {
+var FormParser = {
   detectForms() {
     const forms = [];
     const formElements = document.querySelectorAll('form');

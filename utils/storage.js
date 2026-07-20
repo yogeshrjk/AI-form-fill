@@ -1,4 +1,4 @@
-const AppStorage = {
+var AppStorage = {
   async get(keys) {
     return new Promise((resolve) => {
       chrome.storage.sync.get(keys, resolve);

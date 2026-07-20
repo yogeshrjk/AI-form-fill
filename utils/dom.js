@@ -1,4 +1,4 @@
-const DOMUtils = {
+var DOMUtils = {
   getXPath(element) {
     if (element === document.body) return '/html/body';
     if (element === document.documentElement) return '/html';

@@ -63,6 +63,23 @@ function fillCurrentForm(tab) {
 
 async function injectAndRetry(tab) {
   try {
+    const alreadyInjected = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => typeof window.FormFiller !== 'undefined'
+    });
+
+    if (alreadyInjected?.[0]?.result) {
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 200));
+        try {
+          await chrome.tabs.sendMessage(tab.id, { action: 'fillForms' });
+          return;
+        } catch (e) {}
+      }
+      reportDebug('error', 'Failed to reach content script after injection');
+      return;
+    }
+
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: [

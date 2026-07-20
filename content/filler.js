@@ -1,4 +1,4 @@
-const FormFiller = {
+var FormFiller = {
   async fillForm(form, settings = {}, customPrompt = '', excludedFields = [], ocrContext = '') {
     const fillSpeed = settings.fillSpeed || 'instant';
     const isHumanLike = fillSpeed === 'human';
@@ -15,7 +15,6 @@ const FormFiller = {
       return {};
     }
 
-    const memoryContext = (form && form.id === 'standalone-fields') ? '' : await this.getMemoryContext();
     const filledSignatures = new Set();
 
     const attemptedSignatures = new Set();
@@ -36,8 +35,7 @@ const FormFiller = {
         fields,
         settings,
         customPrompt,
-        ocrContext,
-        memoryContext
+        ocrContext
       );
 
       const filteredValues = this.filterAlreadyFilledValues(values, fields, filledSignatures);
@@ -73,14 +71,14 @@ const FormFiller = {
     this.assignUniqueKeys(fields);
     this.annotateLineItemIndexes(fields);
     this.highlightFields(fields, 'generating');
-    const memoryContext = (form && form.id === 'standalone-fields') ? '' : await this.getMemoryContext();
+    const pageContext = this.getPageContext();
 
     let generatedValues = {};
     if (fields.length > 0) {
       this.reportProgress(`Generating values for ${form.title || 'form'} (${fields.length} fields)`);
       this.checkAborted();
       generatedValues = await window.GeminiService.generate(
-        form.title || 'Fill this form', fields, { ...settings, memoryContext }, customPrompt, ocrContext, memoryContext
+        form.title || 'Fill this form', fields, { ...settings, pageContext }, customPrompt, ocrContext
       );
       generatedValues = this.normalizeRepeatedFamilyValues(fields, generatedValues);
       this.unhighlightFields(fields, 'generating');
@@ -89,9 +87,9 @@ const FormFiller = {
 
     return { fields, values: generatedValues };
   },
+  async generateFieldValues(prompt, fields, settings = {}, customPrompt = '', ocrContext = '') {
+    const pageContext = this.getPageContext();
 
-  async generateFieldValues(prompt, fields, settings = {}, customPrompt = '', ocrContext = '', memoryContext) {
-    const context = (typeof memoryContext !== 'undefined') ? memoryContext : await this.getMemoryContext();
     this.highlightFields(fields, 'generating');
 
     let generatedValues = {};
@@ -101,10 +99,9 @@ const FormFiller = {
       generatedValues = await window.GeminiService.generate(
         prompt,
         fields,
-        { ...settings, memoryContext: context },
+        { ...settings, pageContext },
         customPrompt,
-        ocrContext,
-        context
+        ocrContext
       );
       generatedValues = this.normalizeRepeatedFamilyValues(fields, generatedValues);
       this.unhighlightFields(fields, 'generating');
@@ -114,35 +111,30 @@ const FormFiller = {
     return generatedValues;
   },
 
-  async getMemoryContext() {
-    if (!window.AppStorage) return '';
-    const memory = await window.AppStorage.getSmartMemory();
-    const meta = await window.AppStorage.getSmartMemoryMeta();
-
+  getPageContext() {
     try {
-      const currentOrigin = (new URL(window.location.href)).origin;
-      if (meta && meta.origin && meta.origin !== currentOrigin) {
-        // Do not apply saved smart memory across different origins/pages
-        return '';
-      }
-    } catch (e) {
-      // If URL parsing fails, fall back to using memory
-    }
-    const entries = [
-      ['company', 'Company'],
-      ['phone', 'Phone'],
-      ['gst', 'GST'],
-      ['pan', 'PAN'],
-      ['email', 'Email'],
-      ['address', 'Address']
-    ]
-      .map(([key, label]) => {
-        const value = (memory[key] || '').trim();
-        return value ? `${label}: ${value}` : '';
-      })
-      .filter(Boolean);
+      const body = document.body;
+      if (!body) return '';
 
-    return entries.join('\n');
+      const clone = body.cloneNode(true);
+      const container = document.createElement('div');
+      container.appendChild(clone);
+
+      container.querySelectorAll('script, style, noscript, svg, canvas, iframe, img, video, audio, [aria-hidden="true"], .hidden, [hidden]').forEach(el => el.remove());
+
+      const texts = [];
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+      let node;
+      while (node = walker.nextNode()) {
+        const text = node.textContent.replace(/\s+/g, ' ').trim();
+        if (text.length > 20) texts.push(text);
+      }
+
+      const raw = texts.join('\n');
+      return raw.length > 4000 ? raw.slice(0, 4000) + '...' : raw;
+    } catch (e) {
+      return '';
+    }
   },
 
   highlightFields(fields, mode = 'editing') {
@@ -260,6 +252,8 @@ const FormFiller = {
 
     if (typeof raw === 'boolean') return raw;
 
+    if (typeof raw === 'string' && !this.isRealValue(raw, field)) return '';
+
     if (type === 'date' || type === 'datetime-local' || type === 'month' || type === 'week' || type === 'time') {
       const rawText = String(raw || '').trim();
       if (!rawText || /^""$/.test(rawText) || /^''$/.test(rawText)) return '';
@@ -295,6 +289,20 @@ const FormFiller = {
 
     const suffix = rowPosition + 1;
     return `${text} ${suffix}`;
+  },
+
+  isRealValue(value, field) {
+    const val = String(value).trim().toLowerCase();
+    if (!val) return false;
+    const candidates = [
+      field.label,
+      field.placeholder,
+      field.name,
+      field.id,
+      field.ariaLabel,
+      field.uniqueKey
+    ].filter(Boolean).map(s => String(s).trim().toLowerCase());
+    return !candidates.includes(val);
   },
 
   getFillableFields(fields, excludedFields = [], options = {}) {
@@ -728,10 +736,24 @@ const FormFiller = {
       case 'datetime-local':
       case 'month':
       case 'week':
-      case 'time':
-      case 'number':
-        window.EventUtils.setNativeValue(element, value);
+      case 'time': {
+        const dateStr = String(value ?? '').trim();
+        if (!dateStr) break;
+        if (type === 'date' && !/^\d{4}-\d{2}-\d{2}/.test(dateStr)) break;
+        if (type === 'datetime-local' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(dateStr)) break;
+        if (type === 'month' && !/^\d{4}-\d{2}/.test(dateStr)) break;
+        if (type === 'week' && !/^\d{4}-W\d{2}/.test(dateStr)) break;
+        if (type === 'time' && !/^\d{2}:\d{2}/.test(dateStr)) break;
+        window.EventUtils.setNativeValue(element, dateStr);
         break;
+      }
+
+      case 'number': {
+        const num = Number(value);
+        if (!Number.isFinite(num)) break;
+        window.EventUtils.setNativeValue(element, String(num));
+        break;
+      }
 
       default:
         await window.EventUtils.fillFieldWithDelay(element, value, typeDelay);
